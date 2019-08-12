@@ -3,17 +3,34 @@ package ssh
 import (
 	"bytes"
 	"fmt"
+	"os/exec"
 
 	"golang.org/x/crypto/ssh"
 )
 
-const (
-	AuthByPassword  = "password"
-	AuthByPublicKey = "publickey"
-)
-
 // Execute the SSH task on remote host.
 func (t *Task) Execute() (string, error) {
+	if !t.UseSSHCommand {
+		return t.execute()
+	}
+
+	return t.executeWithCommand()
+}
+
+func (t *Task) executeWithCommand() (string, error) {
+	if t.SSHCommandPath == "" {
+		t.SSHCommandPath = "ssh"
+	}
+	cmd := exec.Command(t.SSHCommandPath, t.Host, t.Script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "fail to exec command: " + string(out), err
+	}
+
+	return string(out), nil
+}
+
+func (t *Task) execute() (string, error) {
 	config := new(ssh.ClientConfig)
 	config.SetDefaults()
 	config.User = t.Username
@@ -22,14 +39,17 @@ func (t *Task) Execute() (string, error) {
 
 	var authMethods []ssh.AuthMethod
 	for _, m := range t.AuthMethods {
-		if m.Type == AuthByPassword {
+		switch m.Type {
+		case AuthByPassword:
 			authMethods = append(authMethods, ssh.Password(m.Content))
-		} else if m.Type == AuthByPublicKey {
+		case AuthByPublicKey:
 			pk, err := publicKey([]byte(m.Content))
 			if err != nil {
 				return "", err
 			}
 			authMethods = []ssh.AuthMethod{pk}
+		default:
+			return "", fmt.Errorf("invalid authentication type")
 		}
 	}
 
@@ -38,7 +58,10 @@ func (t *Task) Execute() (string, error) {
 		return "", fmt.Errorf("none available auth methods")
 	}
 
-	client, err := ssh.Dial("tcp", t.Host, config)
+	if t.Port < 1 {
+		t.Port = 20
+	}
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", t.Host, t.Port), config)
 	if err != nil {
 		return "", err
 	}
